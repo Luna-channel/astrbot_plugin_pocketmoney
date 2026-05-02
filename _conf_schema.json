@@ -32,7 +32,7 @@
     "admin_qq": {
         "description": "管理员QQ号",
         "type": "string",
-        "default": "49025031",
+        "default": "",
         "hint": "投诉信转发目标的管理员QQ号（奥卢斯大人）"
     },
     "admin_permission_denied_msg": {

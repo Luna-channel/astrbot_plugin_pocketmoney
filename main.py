@@ -1722,29 +1722,44 @@ class PocketMoneyPlugin(Star):
 
     # ------------------- 表扬信和投诉信命令 -------------------
 
-    @filter.command("发表扬信")
-    async def send_thank_letter(self, event: AstrMessageEvent):
+    async def _process_thank_letter(self, event: AstrMessageEvent):
+        """处理表扬信的核心逻辑，返回结果消息字符串，失败返回 None"""
         uid, name = event.get_sender_id(), event.get_sender_name() or event.get_sender_id()
         money_mgr, _, is_isolated = self._get_managers_for_user(uid)
         log_prefix = "[隔离池] " if is_isolated else ""
-        
+
         if not self.thank_manager.can_send_today(uid):
-            yield event.plain_result("你今天已经发过表扬信啦，明天再来吧")
-            return
-        amount = random.randint(self.config.get("thank_letter_min_amount", 1), self.config.get("thank_letter_max_amount", 10))
+            return None, "你今天已经发过表扬信啦，明天再来吧"
+        amount = random.randint(
+            self.config.get("thank_letter_min_amount", 1),
+            self.config.get("thank_letter_max_amount", 10)
+        )
         if not self.thank_manager.record_thank_letter(uid, name, amount):
-            yield event.plain_result("发送失败了，请稍后再试...")
-            return
-        # 使用代理管理器（黑名单用户进入隔离池）
+            return None, "发送失败了，请稍后再试..."
         money_mgr.data["balance"] = round(money_mgr.get_balance() + amount, 2)
         money_mgr._save_data()
         logger.info(f"[PocketMoney] {log_prefix}表扬信奖金: +{amount}元")
-        yield event.plain_result(
+        msg = (
             f"收到 {name} 的表扬信！\n"
             f"🎉 获得表扬奖金：+{amount}元\n"
             f"📊 本日表扬奖金：{self.thank_manager.get_today_bonus()}元\n"
             f"💰 当前余额：{money_mgr.get_balance()}元"
         )
+        return amount, msg
+
+    @filter.command("发表扬信")
+    async def send_thank_letter(self, event: AstrMessageEvent):
+        _, msg = await self._process_thank_letter(event)
+        yield event.plain_result(msg)
+
+    @filter.regex(r"统一发表扬信")
+    async def send_thank_letter_broadcast(self, event: AstrMessageEvent):
+        """统一发表扬信：群里所有机器人都能收到，无需指令前缀"""
+        amount, msg = await self._process_thank_letter(event)
+        if amount is None:
+            # 今天已发过或失败时静默忽略，避免多个机器人同时报错刷屏
+            return
+        yield event.plain_result(msg)
 
     @filter.command("发投诉信")
     async def send_complaint_letter(self, event: AstrMessageEvent, *, reason: str = ""):
