@@ -516,7 +516,7 @@ class ThankLetterManager:
 class BackpackManager:
     """
     小背包管理系统
-    - 共享背包：贝塔自己的物品存储（10个格子，只能放自己的东西）
+    - 共享背包：AI自己的物品存储（10个格子，只能放自己的东西）
     - 专属格子：每个用户有3个专属格子（跨窗口，存放收到的礼物）
     - 数据结构: 
       - shared_items: [{"name": str, "description": str, "time": str}]  # 共享背包
@@ -576,7 +576,7 @@ class BackpackManager:
 
     def add_shared_item(self, name: str, description: str) -> bool:
         """
-        添加物品到共享背包（贝塔自己的东西）
+        添加物品到共享背包（AI自己的东西）
         :return: 是否成功
         """
         if self.is_shared_full():
@@ -705,7 +705,7 @@ class PocketMoneyManager:
     - 全局余额管理（不区分会话）
     - 入账/出账记录
     - 存折：需要审批才能取款的安全余额
-    - 笔记功能：贝塔可以自己编辑的备忘录
+    - 笔记功能：管理员可编辑的备忘录（AI不可写入）
     """
 
     def __init__(self, data_dir: str, initial_balance: float = 0, max_records: int = 100):
@@ -1070,16 +1070,17 @@ class PocketMoneyManager:
         return (False, 0, "申请不存在或已处理")
 
 
-@register("astrbot_plugin_pocketmoney", "柯尔", "贝塔的小金库系统，管理余额和收支记录", "1.7.1")
+@register("astrbot_plugin_pocketmoney", "柯尔", "给机器人设计的小金库系统和小背包系统，增加一些rp乐趣", "1.8.0")
 # ==================== 版本历史 ====================
 # v1.0 - 基础零花钱：余额管理、入账/出账、记录查询
 # v1.1 - 表扬信/投诉信系统：每日限制、排行榜、随机奖金 
 # v1.2 - 背包系统：共享背包、物品入库/使用
 # v1.3 - 专属背包格子：每个用户独立的礼物存储空间
-# v1.4 - 笔记功能：AI私密备忘录，管理员可查看/追加
+# v1.4 - 笔记功能：管理员私密备忘录，仅管理员可查看/追加/删除
 # v1.5 - 数据目录迁移至plugin_data，记录操作窗口source替代operator
-# v1.6 - 存折系统：奥卢斯大人保管的钱，AI申请取款需审批
+# v1.6 - 存折系统：管理员保管的钱，AI申请取款需审批
 # v1.7 - 代码重构：删除压岁钱系统，合并存折到小金库，移除硬编码提示词
+# v1.8 - 转公开插件：移除个人化内容，笔记改为仅管理员可写
 # ==================================================
 class PocketMoneyPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -1550,7 +1551,7 @@ class PocketMoneyPlugin(Star):
                 except ValueError:
                     logger.warning("[PocketMoney] 退款金额解析失败")
 
-        # 处理笔记标记（已禁用自动追加，仅清除标记）
+        # 处理笔记标记（AI不可写笔记，仅清除标记不做任何处理）
         note_matches = list(self.note_pattern.finditer(cleaned_text))
         if note_matches:
             cleaned_text = self.note_pattern.sub('', cleaned_text).strip()
@@ -1617,7 +1618,7 @@ class PocketMoneyPlugin(Star):
         return event.role == "admin"
     
     def _admin_denied_msg(self):
-        return self.config.get("admin_permission_denied_msg", "这是我和奥卢斯大人之间的秘密，不能告诉你哦")
+        return self.config.get("admin_permission_denied_msg", "这是和管理员之间的秘密，不能告诉你哦")
     
     def _parse_amount(self, amount_str: str, allow_zero: bool = False) -> tuple:
         """解析金额，返回 (成功, 金额或错误信息)"""
@@ -1769,7 +1770,7 @@ class PocketMoneyPlugin(Star):
         msg = f"📮 投诉信！\n来源：{src}\n投诉人：{name}({uid})\n理由：{reason}"
         try:
             await event.bot.send_private_msg(user_id=int(self.config.get("admin_qq", "")), message=msg)
-            yield event.plain_result("投诉信已转交给奥卢斯大人")
+            yield event.plain_result("投诉信已转交给管理员")
         except: yield event.plain_result(f"投诉已记录：{reason}")
 
     @filter.command("表扬信排行")
@@ -1805,10 +1806,10 @@ class PocketMoneyPlugin(Star):
         slots = f"{backpack_mgr.get_user_item_count(user_id)}/{backpack_mgr.max_user_slots}"
         
         if not items:
-            yield event.plain_result(f"🎁 {user_name}，你在贝塔这里的专属格子（{slots}）：空空如也")
+            yield event.plain_result(f"🎁 {user_name}，你在bot这里的专属格子（{slots}）：空空如也")
             return
         
-        response = f"🎁 {user_name}，你在贝塔这里的专属格子（{slots}）：\n\n"
+        response = f"🎁 {user_name}，你在bot这里的专属格子（{slots}）：\n\n"
         for i, item in enumerate(items, 1):
             response += f"{i}. **{item['name']}**\n"
             response += f"   🎁 来自：{item.get('from', '未知')}\n"
@@ -1819,20 +1820,20 @@ class PocketMoneyPlugin(Star):
 
     @filter.command("查看背包")
     async def view_backpack(self, event: AstrMessageEvent):
-        """(管理员) 查看贝塔的共享背包"""
+        """(管理员) 查看共享背包"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "这是贝塔的私人背包，不能随便看哦"))
+                "这是AI的私人背包，不能随便看哦"))
             return
         
         items = self.backpack_manager.get_shared_items()
         slots = f"{self.backpack_manager.get_shared_item_count()}/{self.backpack_manager.max_shared_slots}"
         
         if not items:
-            yield event.plain_result(f"🎒 贝塔的共享背包（{slots}）：空空如也~")
+            yield event.plain_result(f"🎒 共享背包（{slots}）：空空如也~")
             return
         
-        response = f"🎒 贝塔的共享背包（{slots}）：\n\n"
+        response = f"🎒 共享背包（{slots}）：\n\n"
         for i, item in enumerate(items, 1):
             response += f"{i}. **{item['name']}**\n"
             response += f"   📝 {item['description']}\n"
@@ -1845,7 +1846,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 查看指定用户的专属格子，不指定则查看所有"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作"))
+                "只有管理员能操作"))
             return
         
         if user_id.strip():
@@ -1887,10 +1888,10 @@ class PocketMoneyPlugin(Star):
 
     @filter.command("清空背包")
     async def clear_backpack(self, event: AstrMessageEvent):
-        """(管理员) 清空贝塔的共享背包"""
+        """(管理员) 清空共享背包"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作"))
+                "只有管理员能操作"))
             return
         
         count = self.backpack_manager.get_shared_item_count()
@@ -1902,7 +1903,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 清空指定用户的专属格子"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作"))
+                "只有管理员能操作"))
             return
         
         user_id = user_id.strip()
@@ -1915,7 +1916,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 从共享背包移除指定物品"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作"))
+                "只有管理员能操作"))
             return
         
         if not item_name.strip():
@@ -1932,7 +1933,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 从指定用户的专属格子移除物品"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作"))
+                "只有管理员能操作"))
             return
         
         user_id = user_id.strip()
@@ -1952,7 +1953,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 追加内容到小金库笔记"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作笔记"))
+                "只有管理员能操作笔记"))
             return
         
         if not content.strip():
@@ -1969,7 +1970,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 查看小金库笔记"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "这是贝塔的私密笔记，只有奥卢斯大人能看"))
+                "这是AI的私密笔记，只有管理员能看"))
             return
         
         note = self.manager.get_note()
@@ -1983,7 +1984,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 删除指定序号的笔记"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作笔记"))
+                "只有管理员能操作笔记"))
             return
         
         if not index.strip():
@@ -2023,7 +2024,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 清空小金库笔记"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能清空笔记"))
+                "只有管理员能清空笔记"))
             return
         
         self.manager.clear_note()
@@ -2036,7 +2037,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 将用户加入黑名单，其操作将进入隔离池"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作"))
+                "只有管理员能操作"))
             return
         
         user_id = user_id.strip()
@@ -2068,7 +2069,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 将用户从黑名单移除"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作"))
+                "只有管理员能操作"))
             return
         
         user_id = user_id.strip()
@@ -2093,7 +2094,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 查看黑名单列表"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能查看"))
+                "只有管理员能查看"))
             return
         
         blacklist = self.isolation_manager.get_blacklist()
@@ -2131,7 +2132,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 查看共享隔离池数据，可选指定用户查看其专属格子"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥鲁斯大人能查看"))
+                "只有管理员能查看"))
             return
         
         blacklist = self.isolation_manager.get_blacklist()
@@ -2213,7 +2214,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 从小金库转入存折"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作存折"))
+                "只有管理员能操作存折"))
             return
 
         try:
@@ -2254,7 +2255,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 查看存折余额和最近记录"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能查看存折"))
+                "只有管理员能查看存折"))
             return
 
         try:
@@ -2279,7 +2280,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 批准存折取款申请，可附加原因"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能审批取款"))
+                "只有管理员能审批取款"))
             return
 
         if not application_id.strip():
@@ -2332,7 +2333,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 拒绝存折取款申请"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能审批取款"))
+                "只有管理员能审批取款"))
             return
 
         if not application_id.strip():
@@ -2380,7 +2381,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 忽略存折取款申请（静默移除，不通知申请人）"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能审批取款"))
+                "只有管理员能审批取款"))
             return
 
         if not application_id.strip():
@@ -2405,7 +2406,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 直接从存折取款到小金库"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能操作存折"))
+                "只有管理员能操作存折"))
             return
 
         try:
@@ -2446,7 +2447,7 @@ class PocketMoneyPlugin(Star):
         """(管理员) 查看所有待审批的取款申请"""
         if not self._is_admin(event):
             yield event.plain_result(self.config.get("admin_permission_denied_msg", 
-                "只有奥卢斯大人能查看"))
+                "只有管理员能查看"))
             return
 
         pending = self.manager.get_pending_withdrawals()
