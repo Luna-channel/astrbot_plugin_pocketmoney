@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 from datetime import datetime, timedelta
 
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api import logger, AstrBotConfig
 
@@ -1087,8 +1087,8 @@ class PocketMoneyPlugin(Star):
         super().__init__(context)
         self.config = config
 
-        # 使用插件数据目录（按AstrBot规则使用插件注册名）
-        self.data_dir = os.path.join("data", "plugin_data", "astrbot_plugin_pocketmoney")
+        # 使用框架提供的插件数据目录
+        self.data_dir = str(StarTools.get_data_dir())
         
         # 自动数据迁移：从旧目录迁移到新目录
         self._migrate_data_if_needed()
@@ -1182,8 +1182,8 @@ class PocketMoneyPlugin(Star):
             r"(?:ApplyWithdraw|申请取款|取存折)\s*[:：]\s*\d+(?:\.\d+)?\s*[,，]\s*(.+?)(?=\s*\])"
         )
         
-        # 防重复扣费：记录已处理的消息ID
-        self.processed_message_ids = set()
+        # 防重复扣费：记录已处理的消息ID（用dict保持插入顺序）
+        self.processed_message_ids: dict = {}
 
     def _migrate_data_if_needed(self):
         """从旧数据目录迁移到新目录"""
@@ -1396,9 +1396,11 @@ class PocketMoneyPlugin(Star):
             logger.debug(f"[PocketMoney] 跳过重复处理: {unique_key}")
             return
         
-        self.processed_message_ids.add(unique_key)
+        self.processed_message_ids[unique_key] = None
         if len(self.processed_message_ids) > 1000:
-            self.processed_message_ids = set(list(self.processed_message_ids)[-500:])
+            # 保留最近500条（dict保持插入顺序，切片取最新的）
+            keys = list(self.processed_message_ids.keys())[-500:]
+            self.processed_message_ids = dict.fromkeys(keys)
 
         current_user_id = event.get_sender_id()
         current_user_name = event.get_sender_name() or current_user_id
@@ -1771,7 +1773,8 @@ class PocketMoneyPlugin(Star):
         try:
             await event.bot.send_private_msg(user_id=int(self.config.get("admin_qq", "")), message=msg)
             yield event.plain_result("投诉信已转交给管理员")
-        except: yield event.plain_result(f"投诉已记录：{reason}")
+        except Exception:
+            yield event.plain_result(f"投诉已记录：{reason}")
 
     @filter.command("表扬信排行")
     async def thank_letter_ranking(self, event: AstrMessageEvent, num: str = "10"):
