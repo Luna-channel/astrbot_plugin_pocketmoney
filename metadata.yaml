@@ -4,4 +4,4 @@ desc: 给机器人设计的小金库系统和小背包系统，增加一些rp乐
 help: 管理员指令：发零花钱、查账、查流水、存折存入、批准取款
 version: v1.8.0
 author: 柯尔
-repo: https://github.com/Luna-channel/astrbot_plugins_pocketmoney
+repo: https://github.com/Luna-channel/astrbot_plugin_pocketmoney
