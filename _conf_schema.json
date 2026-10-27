@@ -29,6 +29,12 @@
         "default": 10,
         "hint": "收到表扬信时获得的最大奖金金额"
     },
+    "thank_letter_muted_msg": {
+        "description": "停收表扬信回复文本",
+        "type": "string",
+        "default": "对不起，我现在暂时不收表扬信……{unmute_time}之后再来找我吧",
+        "hint": "管理员使用「停收表扬信」后，用户发表扬信时收到的回复（不计入每日次数）。支持变量：{unmute_time}恢复接收的时间"
+    },
     "admin_qq": {
         "description": "管理员QQ号",
         "type": "string",

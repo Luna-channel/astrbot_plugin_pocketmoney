@@ -406,7 +406,8 @@ class ThankLetterManager:
                 "ranking": {},  # {"sender_id": count}
                 "today_bonus": 0,  # 今日表扬奖金
                 "today_date": "",  # 今日日期
-                "total_bonus": 0  # 累计表扬奖金
+                "total_bonus": 0,  # 累计表扬奖金
+                "mute_until": None  # 停收表扬信截止时间（None表示未停收）
             }
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -422,6 +423,8 @@ class ThankLetterManager:
                     data["today_date"] = ""
                 if "total_bonus" not in data:
                     data["total_bonus"] = 0
+                if "mute_until" not in data:
+                    data["mute_until"] = None
                 return data
         except (json.JSONDecodeError, TypeError):
             return {
@@ -429,7 +432,8 @@ class ThankLetterManager:
                 "ranking": {},
                 "today_bonus": 0,
                 "today_date": "",
-                "total_bonus": 0
+                "total_bonus": 0,
+                "mute_until": None
             }
 
     def _save_data(self):
@@ -511,6 +515,40 @@ class ThankLetterManager:
         # 排序并返回前N名
         sorted_ranking = sorted(ranking.items(), key=lambda x: x[1], reverse=True)
         return sorted_ranking[:top_n]
+
+    # ========== 停收表扬信 ==========
+
+    def set_mute(self, minutes: float) -> datetime:
+        """设置停收时长，返回恢复接收的时间点"""
+        until = datetime.now() + timedelta(minutes=minutes)
+        self.data["mute_until"] = until.strftime("%Y-%m-%d %H:%M:%S")
+        self._save_data()
+        return until
+
+    def clear_mute(self):
+        """立即恢复接收表扬信"""
+        self.data["mute_until"] = None
+        self._save_data()
+
+    def get_mute_until(self):
+        """获取停收截止时间，未设置或格式错误返回 None"""
+        raw = self.data.get("mute_until")
+        if not raw:
+            return None
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            return None
+
+    def is_muted(self) -> bool:
+        """当前是否处于停收状态（过期自动清除）"""
+        until = self.get_mute_until()
+        if until is None:
+            return False
+        if datetime.now() >= until:
+            self.clear_mute()
+            return False
+        return True
 
 
 class BackpackManager:
@@ -1083,7 +1121,7 @@ class PocketMoneyManager:
         return (False, 0, "申请不存在或已处理")
 
 
-@register("astrbot_plugin_pocketmoney", "柯尔", "给机器人设计的小金库系统和小背包系统，增加一些rp乐趣", "1.8.1")
+@register("astrbot_plugin_pocketmoney", "柯尔", "给机器人设计的小金库系统和小背包系统，增加一些rp乐趣", "1.9.0")
 # ==================== 版本历史 ====================
 # v1.0 - 基础零花钱：余额管理、入账/出账、记录查询
 # v1.1 - 表扬信/投诉信系统：每日限制、排行榜、随机奖金 
@@ -1095,6 +1133,7 @@ class PocketMoneyManager:
 # v1.7 - 代码重构：删除压岁钱系统，合并存折到小金库，移除硬编码提示词
 # v1.8 - 转公开插件：移除个人化内容，笔记改为仅管理员可写
 # v1.8.1 - 修复背包标记误匹配，补充背包判定提示，增加入库失败反馈
+# v1.9 - 停收表扬信：管理员可限时停收，回复文本支持{unmute_time}变量
 # ==================================================
 class PocketMoneyPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -1762,11 +1801,34 @@ class PocketMoneyPlugin(Star):
 
     # ------------------- 表扬信和投诉信命令 -------------------
 
+    def _get_muted_msg(self) -> str:
+        """获取停收表扬信时的回复文本，{unmute_time} 会被替换为恢复接收的时间"""
+        template = self.config.get(
+            "thank_letter_muted_msg",
+            "对不起，我现在暂时不收表扬信……{unmute_time}之后再来找我吧"
+        )
+        until = self.thank_manager.get_mute_until()
+        if until is None:
+            return template.replace("{unmute_time}", "过段时间")
+
+        now = datetime.now()
+        if until.date() == now.date():
+            time_str = f"今天 {until.strftime('%H:%M')}"
+        elif until.date() == (now + timedelta(days=1)).date():
+            time_str = f"明天 {until.strftime('%H:%M')}"
+        else:
+            time_str = until.strftime("%m月%d日 %H:%M")
+        return template.replace("{unmute_time}", time_str)
+
     async def _process_thank_letter(self, event: AstrMessageEvent):
         """处理表扬信的核心逻辑，返回结果消息字符串，失败返回 None"""
         uid, name = event.get_sender_id(), event.get_sender_name() or event.get_sender_id()
         money_mgr, _, is_isolated = self._get_managers_for_user(uid)
         log_prefix = "[隔离池] " if is_isolated else ""
+
+        # 停收期间：回复停收文本，不记录、不消耗当日次数
+        if self.thank_manager.is_muted():
+            return None, self._get_muted_msg()
 
         if not self.thank_manager.can_send_today(uid):
             return None, "你今天已经发过表扬信啦，明天再来吧"
@@ -1795,11 +1857,76 @@ class PocketMoneyPlugin(Star):
     @filter.regex(r"统一发表扬信")
     async def send_thank_letter_broadcast(self, event: AstrMessageEvent):
         """统一发表扬信：群里所有机器人都能收到，无需指令前缀"""
+        if self.thank_manager.is_muted():
+            yield event.plain_result(self._get_muted_msg())
+            return
         amount, msg = await self._process_thank_letter(event)
         if amount is None:
             # 今天已发过或失败时静默忽略，避免多个机器人同时报错刷屏
             return
         yield event.plain_result(msg)
+
+    def _parse_mute_duration(self, duration_str: str) -> tuple:
+        """
+        解析停收时长，返回 (成功, 分钟数或错误信息)
+        支持格式：30、30分钟、2小时、1.5h、1天；不带单位默认分钟
+        """
+        s = duration_str.strip()
+        if not s:
+            return (False, "请指定时长")
+        m = re.match(r"^(\d+(?:\.\d+)?)\s*(分钟|分|min|m|小时|时|h|天|日|d)?$", s, re.IGNORECASE)
+        if not m:
+            return (False, "时长格式不正确")
+        val = float(m.group(1))
+        unit = (m.group(2) or "分钟").lower()
+        if unit in ("小时", "时", "h"):
+            val *= 60
+        elif unit in ("天", "日", "d"):
+            val *= 1440
+        return (True, val)
+
+    @filter.command("停收表扬信")
+    async def mute_thank_letter(self, event: AstrMessageEvent, duration: str = ""):
+        """(管理员) 停收表扬信一段时间，时长为0表示立即恢复"""
+        if not self._is_admin(event):
+            yield event.plain_result(self._admin_denied_msg()); return
+
+        ok, result = self._parse_mute_duration(duration)
+        if not ok:
+            yield event.plain_result(
+                f"错误：{result}\n"
+                f"用法：停收表扬信 <时长>，例如「停收表扬信 60」「停收表扬信 30分钟」「停收表扬信 2小时」「停收表扬信 1天」\n"
+                f"不带单位默认按分钟算，时长为 0 表示立即恢复接收"
+            )
+            return
+
+        minutes = result
+        if minutes <= 0:
+            if self.thank_manager.get_mute_until() is None:
+                yield event.plain_result("当前没有在停收表扬信")
+            else:
+                self.thank_manager.clear_mute()
+                yield event.plain_result("✅ 已恢复接收表扬信")
+            return
+
+        until = self.thank_manager.set_mute(minutes)
+        yield event.plain_result(
+            f"🔕 已停收表扬信\n"
+            f"⏰ 恢复时间：{until.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"停收期间收到的表扬信不会计入每日次数，也不会发放奖金"
+        )
+
+    @filter.command("恢复表扬信")
+    async def unmute_thank_letter(self, event: AstrMessageEvent):
+        """(管理员) 立即恢复接收表扬信"""
+        if not self._is_admin(event):
+            yield event.plain_result(self._admin_denied_msg()); return
+
+        if self.thank_manager.get_mute_until() is None:
+            yield event.plain_result("当前没有在停收表扬信")
+            return
+        self.thank_manager.clear_mute()
+        yield event.plain_result("✅ 已恢复接收表扬信")
 
     @filter.command("发投诉信")
     async def send_complaint_letter(self, event: AstrMessageEvent, *, reason: str = ""):
